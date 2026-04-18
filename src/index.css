@@ -1,0 +1,119 @@
+:root {
+  --font-sans: "Segoe UI Variable", "Segoe UI", "PingFang SC", "HarmonyOS Sans SC",
+    "Microsoft YaHei UI", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+  --font-mono: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", "Noto Sans Mono CJK SC",
+    Consolas, monospace;
+  --float-panel-width: 230px;
+  --background: #f6f2e7;
+  --background-deep: #ece3cf;
+  --panel: rgba(255, 255, 255, 0.78);
+  --surface-soft: rgba(255, 255, 255, 0.7);
+  --surface-strong: #ffffff;
+  --pill-surface: rgba(244, 239, 229, 0.94);
+  --panel-strong: rgba(255, 255, 255, 0.92);
+  --accent-soft: rgba(43, 133, 255, 0.14);
+  --border: rgba(126, 111, 82, 0.13);
+  --heading: #17191f;
+  --muted: #6b7282;
+  --muted-soft: rgba(107, 114, 130, 0.58);
+  --accent: #2b85ff;
+  --accent-strong: #0c57ff;
+  --shadow: 0 18px 46px rgba(32, 37, 53, 0.1);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-weight: 500;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--heading);
+  background:
+    radial-gradient(circle at top, rgba(255, 214, 150, 0.42), transparent 36%),
+    linear-gradient(180deg, var(--background), var(--background-deep));
+}
+
+:root[data-platform="macos"] {
+  --font-sans: "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB",
+    "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", monospace;
+  --float-panel-width: 236px;
+}
+
+:root[data-platform="windows"] {
+  --font-sans: "Segoe UI Variable", "Segoe UI", "PingFang SC", "HarmonyOS Sans SC",
+    "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+}
+
+:root[data-platform="linux"] {
+  --font-sans: "Noto Sans CJK SC", "Noto Sans SC", "Ubuntu", "DejaVu Sans",
+    "Liberation Sans", "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", "Noto Sans Mono CJK SC",
+    monospace;
+  --float-panel-width: 244px;
+}
+
+:root[data-theme="dark"] {
+  --background: #121418;
+  --background-deep: #0d1014;
+  --panel: rgba(26, 29, 35, 0.86);
+  --surface-soft: rgba(33, 37, 45, 0.94);
+  --surface-strong: rgba(42, 47, 58, 0.98);
+  --pill-surface: rgba(30, 34, 41, 0.96);
+  --panel-strong: rgba(39, 44, 52, 0.98);
+  --accent-soft: rgba(46, 134, 255, 0.18);
+  --border: rgba(255, 255, 255, 0.08);
+  --heading: #f4f7fb;
+  --muted: #9ea7b8;
+  --muted-soft: rgba(158, 167, 184, 0.42);
+  --accent: #2e86ff;
+  --accent-strong: #72a7ff;
+  --shadow: 0 20px 56px rgba(0, 0, 0, 0.34);
+  background:
+    radial-gradient(circle at top, rgba(255, 138, 0, 0.18), transparent 36%),
+    linear-gradient(180deg, var(--background), var(--background-deep));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: inherit;
+  color: var(--heading);
+  font-family: var(--font-sans);
+  font-size: 16px;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.02);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+input::placeholder {
+  color: var(--muted-soft);
+}
