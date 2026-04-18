@@ -3,6 +3,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{anyhow, bail, Context};
 use chrono::{Local, TimeZone, Utc};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tokio::{sync::Mutex, time::sleep};
 
 use crate::{
@@ -21,6 +23,8 @@ type CommandResult<T> = Result<T, String>;
 
 const INCREMENTAL_SYNC_OVERLAP_SECONDS: i64 = 300;
 const MAX_SYNC_ATTEMPTS: usize = 3;
+#[cfg(target_os = "macos")]
+const FLOAT_WINDOW_CORNER_RADIUS: f64 = 22.0;
 
 #[derive(Clone)]
 struct SyncPlan {
@@ -76,6 +80,20 @@ pub fn save_config(
 }
 
 #[tauri::command]
+pub fn logout(state: State<'_, AppState>, app: tauri::AppHandle) -> CommandResult<AppConfig> {
+  let current = config::load_config(&state.config_path).sanitized();
+  let logged_out = current.logged_out();
+
+  config::save_config(&state.config_path, &logged_out).map_err(|error| error.to_string())?;
+
+  if let Some(window) = app.get_webview_window("float") {
+    apply_float_window_config(&window, &logged_out).map_err(|error| error.to_string())?;
+  }
+
+  Ok(logged_out)
+}
+
+#[tauri::command]
 pub async fn open_settings_window(app: tauri::AppHandle) -> CommandResult<()> {
   if let Some(window) = app.get_webview_window("settings") {
     focus_window(&window).map_err(|error| error.to_string())?;
@@ -106,19 +124,25 @@ pub async fn open_float_window(
 
   let config = config::load_config(&state.config_path).sanitized();
   let metrics = float_window_metrics();
-  let shadow_enabled = !matches!(current_platform(), DesktopPlatform::Linux);
+  let use_transparent_window = matches!(current_platform(), DesktopPlatform::Macos);
+  let shadow_enabled = matches!(
+    current_platform(),
+    DesktopPlatform::Windows | DesktopPlatform::Unknown
+  );
   let builder = WebviewWindowBuilder::new(&app, "float", WebviewUrl::App("index.html".into()))
     .title("WebApiLogs 状态悬浮窗")
     .inner_size(metrics.width, metrics.height)
     .min_inner_size(metrics.min_width, metrics.min_height)
     .resizable(false)
     .decorations(false)
+    .transparent(use_transparent_window)
     .always_on_top(config.float_always_on_top)
     .skip_taskbar(true)
     .shadow(shadow_enabled)
     .focused(true);
 
-  builder.build().map_err(|error| error.to_string())?;
+  let window = builder.build().map_err(|error| error.to_string())?;
+  apply_float_window_config(&window, &config).map_err(|error| error.to_string())?;
   Ok(())
 }
 
@@ -217,7 +241,8 @@ pub async fn query_logs(
       .record_sync_started(&scope_key, &request.bucket_key, &plan.sync_mode, started_at)
       .map_err(|error| error.to_string())?;
     let started_state = load_sync_state(&database, &scope_key, &request.bucket_key);
-    emit_sync_event(&app, started_state, false).map_err(|error| error.to_string())?;
+    let cache_hit_rate = get_cache_hit_rate(&database, &config).map_err(|error| error.to_string())?;
+    emit_sync_event(&app, started_state, false, cache_hit_rate).map_err(|error| error.to_string())?;
 
     drop(database);
 
@@ -257,7 +282,8 @@ pub async fn query_logs(
       .record_sync_started(&scope_key, &request.bucket_key, &plan.sync_mode, started_at)
       .map_err(|error| error.to_string())?;
     sync_state = load_sync_state(&database, &scope_key, &request.bucket_key);
-    emit_sync_event(&app, sync_state.clone(), false).map_err(|error| error.to_string())?;
+    let cache_hit_rate = get_cache_hit_rate(&database, &config).map_err(|error| error.to_string())?;
+    emit_sync_event(&app, sync_state.clone(), false, cache_hit_rate).map_err(|error| error.to_string())?;
 
     let background_request = request.clone();
     let background_config = config.clone();
@@ -403,6 +429,22 @@ fn apply_float_window_config(
   config: &AppConfig,
 ) -> anyhow::Result<()> {
   window.set_always_on_top(config.float_always_on_top)?;
+  apply_float_window_appearance(window)?;
+  Ok(())
+}
+
+fn apply_float_window_appearance(_window: &tauri::WebviewWindow) -> anyhow::Result<()> {
+  #[cfg(target_os = "macos")]
+  {
+    _window.set_effects(
+      EffectsBuilder::new()
+        .effect(Effect::AppearanceBased)
+        .state(EffectState::Active)
+        .radius(FLOAT_WINDOW_CORNER_RADIUS)
+        .build(),
+    )?;
+  }
+
   Ok(())
 }
 
@@ -559,7 +601,8 @@ async fn perform_log_sync(
         )?;
 
         let sync_state = load_sync_state(&database, &scope_key, &request.bucket_key);
-        emit_sync_event(&app, sync_state.clone(), should_reload)?;
+        let cache_hit_rate = get_cache_hit_rate(&database, &config)?;
+        emit_sync_event(&app, sync_state.clone(), should_reload, cache_hit_rate)?;
         return Ok(sync_state);
       }
       Err(error) => {
@@ -585,7 +628,8 @@ async fn perform_log_sync(
     &error_message,
   )?;
 
-  emit_sync_event(&app, sync_state.clone(), false)?;
+  let cache_hit_rate = get_cache_hit_rate(&database, &config)?;
+  emit_sync_event(&app, sync_state.clone(), false, cache_hit_rate)?;
   Err(anyhow!(error_message))
 }
 
@@ -625,12 +669,14 @@ fn emit_sync_event(
   app: &tauri::AppHandle,
   sync_state: CacheSyncState,
   should_reload: bool,
+  cache_hit_rate: Option<f64>,
 ) -> anyhow::Result<()> {
   app
     .emit(
       "logs-sync-updated",
       LogSyncEventPayload {
         should_reload,
+        cache_hit_rate,
         sync_state,
       },
     )
@@ -681,7 +727,7 @@ fn build_logs_csv(items: &[LogItem]) -> anyhow::Result<String> {
       item.request_id.clone(),
       quota,
       item.prompt_tokens.to_string(),
-      other.cache_write_tokens.to_string(),
+      other.cache_write_input_tokens().to_string(),
       item.completion_tokens.to_string(),
       other.cache_tokens.to_string(),
       item.use_time.to_string(),

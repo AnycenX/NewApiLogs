@@ -4,6 +4,7 @@
   --font-mono: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", "Noto Sans Mono CJK SC",
     Consolas, monospace;
   --float-panel-width: 230px;
+  --float-window-radius: 18px;
   --background: #f6f2e7;
   --background-deep: #ece3cf;
   --panel: rgba(255, 255, 255, 0.78);
@@ -37,6 +38,7 @@
     "Helvetica Neue", sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", monospace;
   --float-panel-width: 236px;
+  --float-window-radius: 22px;
 }
 
 :root[data-platform="windows"] {
@@ -92,6 +94,11 @@ body {
   color: var(--heading);
   font-family: var(--font-sans);
   font-size: 16px;
+}
+
+html.float-window,
+body.float-window {
+  background: transparent !important;
 }
 
 button,

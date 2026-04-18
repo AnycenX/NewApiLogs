@@ -57,6 +57,20 @@ impl AppConfig {
     self
   }
 
+  pub fn logged_out(&self) -> Self {
+    Self {
+      base_url: self.base_url.clone(),
+      token: String::new(),
+      user_id: String::new(),
+      fetch_interval_minutes: self.fetch_interval_minutes,
+      status_refresh_interval_minutes: self.status_refresh_interval_minutes,
+      cache_hit_rate_window_minutes: self.cache_hit_rate_window_minutes,
+      float_always_on_top: self.float_always_on_top,
+      theme_mode: self.theme_mode.clone(),
+    }
+    .sanitized()
+  }
+
   pub fn is_ready(&self) -> bool {
     !self.base_url.trim().is_empty()
       && !self.user_id.trim().is_empty()
@@ -124,13 +138,32 @@ pub struct LogStat {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OtherInfo {
+  #[serde(default)]
   pub cache_tokens: i64,
+  #[serde(default)]
   pub cache_write_tokens: i64,
+  #[serde(default)]
+  pub cache_creation_tokens: i64,
+  #[serde(default)]
   pub model_ratio: f64,
+  #[serde(default)]
   pub group_ratio: f64,
+  #[serde(default)]
   pub completion_ratio: f64,
+  #[serde(default)]
   pub cache_creation_ratio_5m: f64,
+  #[serde(default)]
   pub frt: i64,
+}
+
+impl OtherInfo {
+  pub fn cache_write_input_tokens(&self) -> i64 {
+    if self.cache_write_tokens > 0 {
+      self.cache_write_tokens
+    } else {
+      self.cache_creation_tokens.max(0)
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -258,13 +291,56 @@ pub struct CacheHitRateStats {
 }
 
 impl CacheHitRateStats {
+  pub fn total_input_tokens(&self) -> i64 {
+    self.cache_read_tokens + self.cache_write_tokens + self.prompt_tokens
+  }
+
   pub fn hit_rate(&self) -> Option<f64> {
-    let total = self.cache_read_tokens + self.cache_write_tokens + self.prompt_tokens;
+    let total = self.total_input_tokens();
     if total > 0 {
       Some(self.cache_read_tokens as f64 * 100.0 / total as f64)
     } else {
       None
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{CacheHitRateStats, OtherInfo};
+
+  #[test]
+  fn other_info_falls_back_to_cache_creation_tokens() {
+    let other = OtherInfo {
+      cache_write_tokens: 0,
+      cache_creation_tokens: 128,
+      ..Default::default()
+    };
+
+    assert_eq!(other.cache_write_input_tokens(), 128);
+  }
+
+  #[test]
+  fn other_info_prefers_cache_write_tokens_when_available() {
+    let other = OtherInfo {
+      cache_write_tokens: 64,
+      cache_creation_tokens: 128,
+      ..Default::default()
+    };
+
+    assert_eq!(other.cache_write_input_tokens(), 64);
+  }
+
+  #[test]
+  fn cache_hit_rate_uses_total_input_tokens() {
+    let stats = CacheHitRateStats {
+      cache_read_tokens: 80,
+      cache_write_tokens: 20,
+      prompt_tokens: 100,
+    };
+
+    assert_eq!(stats.total_input_tokens(), 200);
+    assert_eq!(stats.hit_rate(), Some(40.0));
   }
 }
 
@@ -307,5 +383,6 @@ pub struct ClearCacheResult {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LogSyncEventPayload {
   pub should_reload: bool,
+  pub cache_hit_rate: Option<f64>,
   pub sync_state: CacheSyncState,
 }

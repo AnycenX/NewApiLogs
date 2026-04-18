@@ -12,6 +12,7 @@ import {
   History,
   Link2,
   ListFilter,
+  LogOut,
   Monitor,
   MoonStar,
   Pin,
@@ -59,6 +60,7 @@ type LogViewMode = "card" | "table";
 
 const PAGE_SIZE = 20;
 const WINDOW_LABELS: AppWindowKind[] = ["main", "settings", "float"];
+const LOG_VIEW_MODE_STORAGE_KEY = "webapilogs.logViewMode";
 
 const defaultConfig: AppConfig = {
   base_url: "https://ai.centos.hk",
@@ -142,17 +144,40 @@ function MainWindowApp() {
   const [modelFilter, setModelFilter] = useState("");
   const [tokenFilter, setTokenFilter] = useState("");
   const [requestIdFilter, setRequestIdFilter] = useState("");
-  const [viewMode, setViewMode] = useState<LogViewMode>("card");
+  const [viewMode, setViewMode] = useState<LogViewMode>(() => loadInitialLogViewMode());
   const [selectedLog, setSelectedLog] = useState<LogItem | null>(null);
   const [isExportingLogs, setIsExportingLogs] = useState(false);
   const [statusText, setStatusText] = useState("正在加载本地配置...");
 
   const statusRefreshLock = useRef(false);
   const logsRefreshLock = useRef(false);
+  const requestSessionRef = useRef(0);
 
   useResolvedTheme(config.theme_mode);
   const activeScopeKey = getScopeKey(config);
   const activeBucketKey = resolveTimeRangeQuery(timeRange).bucket_key;
+  const applyLoggedOutState = (nextConfig: AppConfig, message: string) => {
+    statusRefreshLock.current = false;
+    logsRefreshLock.current = false;
+    setConfig(nextConfig);
+    setLoginForm(toLoginForm(nextConfig));
+    setAuthenticated(false);
+    setIsLoggingIn(false);
+    setIsRefreshingStatus(false);
+    setIsRefreshingLogs(false);
+    setStatusData(null);
+    setLogsResult(null);
+    setCurrentSyncState(defaultSyncState);
+    setCacheHitRate(null);
+    setTimeRange("today");
+    setPage(1);
+    setFiltersExpanded(false);
+    setModelFilter("");
+    setTokenFilter("");
+    setRequestIdFilter("");
+    setSelectedLog(null);
+    setStatusText(message);
+  };
 
   const totalPages = logsResult
     ? Math.max(1, Math.ceil(logsResult.page.total / Math.max(1, logsResult.page.page_size)))
@@ -172,6 +197,10 @@ function MainWindowApp() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedLog]);
+
+  useEffect(() => {
+    persistLogViewMode(viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     let active = true;
@@ -223,21 +252,18 @@ function MainWindowApp() {
           return;
         }
 
-        setConfig(payload);
-        setLoginForm(toLoginForm(payload));
-        setAuthenticated(isConfigReady(payload));
-        setPage(1);
-
         if (!isConfigReady(payload)) {
-          setStatusData(null);
-          setLogsResult(null);
-          setCurrentSyncState(defaultSyncState);
-          setCacheHitRate(null);
-          setSelectedLog(null);
-          setStatusText("连接配置已清空，请重新登录。");
+          requestSessionRef.current += 1;
+          applyLoggedOutState(payload, "已退出登录，连接信息已清除，请重新登录。");
           return;
         }
 
+        requestSessionRef.current += 1;
+        setConfig(payload);
+        setLoginForm(toLoginForm(payload));
+        setAuthenticated(true);
+        setPage(1);
+        setSelectedLog(null);
         setStatusText("已从其他窗口同步最新配置，正在刷新状态与日志...");
         void refreshStatus(payload, false);
         void refreshLogsWith({
@@ -275,6 +301,7 @@ function MainWindowApp() {
         }
 
         setCurrentSyncState(payload.sync_state);
+        setCacheHitRate(payload.cache_hit_rate);
         setStatusText(describeSyncEvent(payload.sync_state));
 
         if (payload.should_reload) {
@@ -402,11 +429,15 @@ function MainWindowApp() {
       return;
     }
 
+    const requestSession = requestSessionRef.current;
     statusRefreshLock.current = true;
     setIsRefreshingStatus(true);
 
     try {
       const payload = await invoke<StatusPayload>("fetch_status");
+      if (requestSession !== requestSessionRef.current) {
+        return;
+      }
       setStatusData(payload);
       setCacheHitRate(payload.cache_hit_rate);
       setStatusText(`状态已刷新，更新时间 ${formatTime(payload.fetched_at)}`);
@@ -416,10 +447,14 @@ function MainWindowApp() {
         await broadcastWindowEvent(appWindow.label as AppWindowKind, "status-updated", payload);
       }
     } catch (error) {
-      setStatusText(readError(error));
+      if (requestSession === requestSessionRef.current) {
+        setStatusText(readError(error));
+      }
     } finally {
       statusRefreshLock.current = false;
-      setIsRefreshingStatus(false);
+      if (requestSession === requestSessionRef.current) {
+        setIsRefreshingStatus(false);
+      }
     }
   };
 
@@ -444,6 +479,7 @@ function MainWindowApp() {
       return;
     }
 
+    const requestSession = requestSessionRef.current;
     logsRefreshLock.current = true;
     setIsRefreshingLogs(true);
 
@@ -457,16 +493,23 @@ function MainWindowApp() {
         forceRefresh,
       );
       const payload = await invoke<LogQueryResult>("query_logs", { request });
+      if (requestSession !== requestSessionRef.current) {
+        return;
+      }
       setLogsResult(payload);
       setCurrentSyncState(payload.sync_state);
       setCacheHitRate(payload.cache_hit_rate);
       setStatusText(describeLogRefresh(payload));
       setConfig(targetConfig);
     } catch (error) {
-      setStatusText(readError(error));
+      if (requestSession === requestSessionRef.current) {
+        setStatusText(readError(error));
+      }
     } finally {
       logsRefreshLock.current = false;
-      setIsRefreshingLogs(false);
+      if (requestSession === requestSessionRef.current) {
+        setIsRefreshingLogs(false);
+      }
     }
   };
 
@@ -477,6 +520,7 @@ function MainWindowApp() {
 
     try {
       const verified = await invoke<AppConfig>("verify_login", { request: loginForm });
+      requestSessionRef.current += 1;
       setConfig(verified);
       setLoginForm(toLoginForm(verified));
       setAuthenticated(true);
@@ -497,6 +541,22 @@ function MainWindowApp() {
       setStatusText(readError(error));
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!confirmLogout()) {
+      return;
+    }
+
+    setStatusText("正在退出登录...");
+
+    try {
+      const loggedOut = await logoutAndBroadcast(appWindow.label as AppWindowKind);
+      requestSessionRef.current += 1;
+      applyLoggedOutState(loggedOut, "已退出登录，连接信息已清除，请重新登录。");
+    } catch (error) {
+      setStatusText(`退出登录失败：${readError(error)}`);
     }
   };
 
@@ -562,11 +622,9 @@ function MainWindowApp() {
         <main className="login-layout">
           <section className="login-card panel">
             <div className="hero-copy">
-              <span className="eyebrow">P1 已升级</span>
-              <h1>旧版多窗口能力已迁到 Tauri</h1>
+              <h1>NewApi Sync</h1>
               <p>
-                主窗口负责日志工作台，设置页和悬浮窗改成独立窗口；状态区也补齐了余额、已用余额、
-                今日消费、请求次数和缓存命中率五项展示。
+                请先输入用户ID与平台API Token。
               </p>
             </div>
 
@@ -625,19 +683,8 @@ function MainWindowApp() {
 
           <section className="feature-grid">
             <article className="feature-card panel">
-              <Database size={18} />
-              <h3>SQLite 缓存优先</h3>
-              <p>日志分页优先走本地缓存，同一时间桶会自动判断是否需要远程同步。</p>
-            </article>
-            <article className="feature-card panel">
-              <Settings2 size={18} />
-              <h3>设置页独立窗口</h3>
-              <p>连接配置、刷新频率和主题设置不再挤在弹层里，而是单独布局独立保存。</p>
-            </article>
-            <article className="feature-card panel">
-              <Activity size={18} />
-              <h3>Tauri 悬浮状态窗</h3>
-              <p>悬浮窗会常驻置顶，方便在做其他工作时随手查看余额、消费和缓存命中率。</p>
+              <h3>Tips</h3>
+              <p>本项目全部由AI完成。</p>
             </article>
           </section>
         </main>
@@ -664,15 +711,13 @@ function MainWindowApp() {
                 {themeOptions.map(({ key, label, icon: Icon }) => (
                   <button
                     key={key}
-                    className={
-                      `${key === config.theme_mode ? "theme-chip active" : "theme-chip"}${key === "system" ? "" : " icon-only"}`
-                    }
+                    aria-label={label}
+                    className={`${key === config.theme_mode ? "theme-chip active" : "theme-chip"} icon-only`}
                     onClick={() => void handleQuickTheme(key)}
                     title={label}
                     type="button"
                   >
                     <Icon size={16} />
-                    {key === "system" ? <span>{label}</span> : null}
                   </button>
                 ))}
               </div>
@@ -702,6 +747,7 @@ function MainWindowApp() {
                 <Settings2 size={17} />
               </button>
               <button
+                aria-label={isRefreshingLogs ? "同步中..." : "同步日志"}
                 className="primary-button"
                 disabled={isRefreshingLogs}
                 onClick={() => {
@@ -716,10 +762,20 @@ function MainWindowApp() {
                     targetRequestIdFilter: requestIdFilter,
                   });
                 }}
+                title={isRefreshingLogs ? "同步中..." : "同步日志"}
                 type="button"
               >
                 <Database size={16} />
                 <span>{isRefreshingLogs ? "同步中..." : "同步日志"}</span>
+              </button>
+              <button
+                className="ghost-button hero-logout-button"
+                onClick={() => void handleLogout()}
+                title="登出"
+                type="button"
+              >
+                <LogOut size={16} />
+                <span>登出</span>
               </button>
             </div>
           </section>
@@ -758,7 +814,7 @@ function MainWindowApp() {
               icon={<History size={18} />}
               label="缓存命中率"
               value={cacheHitRate === null ? "--" : `${cacheHitRate.toFixed(1)}%`}
-              hint={`统计窗口 ${formatWindow(config.cache_hit_rate_window_minutes)}`}
+              hint={`统计窗口 ${formatWindow(config.cache_hit_rate_window_minutes)}，按命中 Tokens / 总输入 Tokens`}
             />
           </section>
 
@@ -1042,8 +1098,10 @@ function MainWindowApp() {
                       </div>
 
                       <div className="metric-strip">
-                        <MetricBadge label="输入" value={formatInput(item.prompt_tokens, other.cache_write_tokens)} />
-                        <MetricBadge label="输出" value={formatInput(item.completion_tokens, other.cache_tokens)} />
+                        <MetricBadge label="输入 Tokens" value={formatCount(item.prompt_tokens)} />
+                        <MetricBadge label="缓存写入" value={formatCount(getCacheWriteTokens(other))} />
+                        <MetricBadge label="缓存命中" value={formatCount(other.cache_tokens)} />
+                        <MetricBadge label="输出 Tokens" value={formatCount(item.completion_tokens)} />
                         <MetricBadge label="耗时" value={formatDuration(item.use_time)} />
                         <MetricBadge label="首字" value={formatLatency(other.frt)} />
                         <MetricBadge label="模型倍率" value={formatRatio(other.model_ratio)} />
@@ -1051,7 +1109,6 @@ function MainWindowApp() {
                       </div>
 
                       <div className="request-meta">
-                        <span>请求 ID：{item.request_id || "--"}</span>
                         <span>IP：{item.ip || "--"}</span>
                       </div>
                     </article>
@@ -1161,6 +1218,7 @@ function SettingsWindowApp() {
   const [isLoadingCacheOverview, setIsLoadingCacheOverview] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [statusText, setStatusText] = useState("正在载入设置页...");
+  const configVersionRef = useRef(0);
   const normalizedConfig = normalizeConfig(config);
   const normalizedDraft = normalizeConfig(settingsDraft);
   const hasUnsavedChanges =
@@ -1174,6 +1232,14 @@ function SettingsWindowApp() {
     normalizedDraft.theme_mode !== normalizedConfig.theme_mode;
   const draftConnectionReady = isConfigReady(normalizedDraft);
   const savedScopeKey = getScopeKey(config);
+  const canLogout = Boolean(config.user_id || config.token);
+
+  const applyLoggedOutState = (nextConfig: AppConfig, message: string) => {
+    setConfig(nextConfig);
+    setSettingsDraft(nextConfig);
+    setCacheOverview(createEmptyCacheOverview());
+    setStatusText(message);
+  };
 
   useResolvedTheme(settingsDraft.theme_mode);
 
@@ -1183,17 +1249,24 @@ function SettingsWindowApp() {
       return;
     }
 
+    const requestVersion = configVersionRef.current;
+
     if (!silent) {
       setIsLoadingCacheOverview(true);
     }
 
     try {
       const payload = await invoke<CacheOverviewPayload>("get_cache_overview");
+      if (requestVersion !== configVersionRef.current || payload.scope_key !== scopeKey) {
+        return;
+      }
       setCacheOverview(payload);
     } catch (error) {
-      setStatusText(readError(error));
+      if (requestVersion === configVersionRef.current) {
+        setStatusText(readError(error));
+      }
     } finally {
-      if (!silent) {
+      if (!silent && requestVersion === configVersionRef.current) {
         setIsLoadingCacheOverview(false);
       }
     }
@@ -1211,6 +1284,7 @@ function SettingsWindowApp() {
 
         applyDesktopPlatform(payload.platform);
         setDesktopPlatform(payload.platform);
+        configVersionRef.current += 1;
         setConfig(payload.config);
         setSettingsDraft(payload.config);
         setStatusText("已读取本地配置，可以直接修改并保存。");
@@ -1248,6 +1322,13 @@ function SettingsWindowApp() {
       try {
         unlistenConfig = await appWindow.listen<AppConfig>("config-updated", ({ payload }) => {
           if (!active) {
+            return;
+          }
+
+          configVersionRef.current += 1;
+
+          if (!isConfigReady(payload)) {
+            applyLoggedOutState(payload, "已退出登录，连接信息已清除，可在此重新填写后保存。");
             return;
           }
 
@@ -1358,6 +1439,7 @@ function SettingsWindowApp() {
         },
       });
 
+      configVersionRef.current += 1;
       setConfig(saved);
       setSettingsDraft(saved);
       setStatusText("设置已保存，正在同步其他窗口...");
@@ -1373,6 +1455,22 @@ function SettingsWindowApp() {
       setStatusText(readError(error));
     } finally {
       setIsSavingSettings(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!confirmLogout(hasUnsavedChanges)) {
+      return;
+    }
+
+    setStatusText("正在退出登录...");
+
+    try {
+      const loggedOut = await logoutAndBroadcast(appWindow.label as AppWindowKind);
+      configVersionRef.current += 1;
+      applyLoggedOutState(loggedOut, "已退出登录，连接信息已清除，可在此重新填写后保存。");
+    } catch (error) {
+      setStatusText(`退出登录失败：${readError(error)}`);
     }
   };
 
@@ -1656,6 +1754,15 @@ function SettingsWindowApp() {
             <div className="settings-actions">
               <button
                 className="ghost-button"
+                disabled={!canLogout}
+                onClick={() => void handleLogout()}
+                type="button"
+              >
+                <LogOut size={16} />
+                <span>登出</span>
+              </button>
+              <button
+                className="ghost-button"
                 onClick={() => {
                   setSettingsDraft(config);
                   void closeWindowByLabel(appWindow.label as AppWindowKind, setStatusText);
@@ -1861,8 +1968,19 @@ function FloatWindowApp() {
   const [statusText, setStatusText] = useState("正在加载悬浮窗...");
 
   const refreshLock = useRef(false);
+  const requestSessionRef = useRef(0);
+  const applyLoggedOutState = (nextConfig: AppConfig, message: string) => {
+    refreshLock.current = false;
+    setConfig(nextConfig);
+    setAuthenticated(false);
+    setIsRefreshing(false);
+    setStatusData(null);
+    setCacheHitRate(null);
+    setStatusText(message);
+  };
 
   useResolvedTheme(config.theme_mode);
+  const activeScopeKey = getScopeKey(config);
 
   useEffect(() => {
     const root = document.getElementById("root");
@@ -1915,6 +2033,8 @@ function FloatWindowApp() {
     let active = true;
     let unlistenConfig: (() => void) | undefined;
     let unlistenStatus: (() => void) | undefined;
+    let unlistenSync: (() => void) | undefined;
+    let unlistenCacheCleared: (() => void) | undefined;
 
     const attach = async () => {
       try {
@@ -1923,16 +2043,15 @@ function FloatWindowApp() {
             return;
           }
 
-          setConfig(payload);
-          setAuthenticated(isConfigReady(payload));
-
           if (!isConfigReady(payload)) {
-            setStatusData(null);
-            setCacheHitRate(null);
-            setStatusText("连接配置已清空，请先在设置页重新配置。");
+            requestSessionRef.current += 1;
+            applyLoggedOutState(payload, "已退出登录，请先在设置页重新配置连接。");
             return;
           }
 
+          requestSessionRef.current += 1;
+          setConfig(payload);
+          setAuthenticated(true);
           setStatusText("已同步最新配置，正在刷新悬浮状态...");
           void refreshStatus(payload, false);
         });
@@ -1946,6 +2065,27 @@ function FloatWindowApp() {
           setCacheHitRate(payload.cache_hit_rate);
           setStatusText(`同步时间 ${formatTime(payload.fetched_at)}`);
         });
+
+        unlistenSync = await appWindow.listen<LogSyncEventPayload>("logs-sync-updated", ({ payload }) => {
+          if (!active) {
+            return;
+          }
+
+          if (payload.sync_state.scope_key && activeScopeKey && payload.sync_state.scope_key !== activeScopeKey) {
+            return;
+          }
+
+          setCacheHitRate(payload.cache_hit_rate);
+        });
+
+        unlistenCacheCleared = await appWindow.listen<ClearCacheResult>("cache-cleared", ({ payload }) => {
+          if (!active) {
+            return;
+          }
+
+          setCacheHitRate(null);
+          setStatusText(`本地缓存已清空，共移除 ${payload.deleted_logs} 条日志。`);
+        });
       } catch (error) {
         if (active) {
           setStatusText(`悬浮窗事件监听失败：${readError(error)}`);
@@ -1958,8 +2098,10 @@ function FloatWindowApp() {
       active = false;
       unlistenConfig?.();
       unlistenStatus?.();
+      unlistenSync?.();
+      unlistenCacheCleared?.();
     };
-  }, [appWindow]);
+  }, [activeScopeKey, appWindow]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -1992,11 +2134,15 @@ function FloatWindowApp() {
       return;
     }
 
+    const requestSession = requestSessionRef.current;
     refreshLock.current = true;
     setIsRefreshing(true);
 
     try {
       const payload = await invoke<StatusPayload>("fetch_status");
+      if (requestSession !== requestSessionRef.current) {
+        return;
+      }
       setStatusData(payload);
       setCacheHitRate(payload.cache_hit_rate);
       setConfig(targetConfig);
@@ -2006,10 +2152,14 @@ function FloatWindowApp() {
         await broadcastWindowEvent(appWindow.label as AppWindowKind, "status-updated", payload);
       }
     } catch (error) {
-      setStatusText(readError(error));
+      if (requestSession === requestSessionRef.current) {
+        setStatusText(readError(error));
+      }
     } finally {
       refreshLock.current = false;
-      setIsRefreshing(false);
+      if (requestSession === requestSessionRef.current) {
+        setIsRefreshing(false);
+      }
     }
   };
 
@@ -2074,7 +2224,7 @@ function FloatWindowApp() {
           <div className="float-heading" title={statusText}>
             <div className="float-heading-copy">
               <div className="section-title float-title">
-                <span>状态悬浮窗</span>
+                <span>状态</span>
                 <span className="float-window-tag">
                   {config.float_always_on_top ? "置顶" : "普通"}
                 </span>
@@ -2276,10 +2426,11 @@ function LogTableView({
             <th>模型</th>
             <th>Token</th>
             <th>分组</th>
-            <th>请求 ID</th>
             <th>消费</th>
-            <th>输入</th>
-            <th>输出</th>
+            <th>输入 Tokens</th>
+            <th>缓存写入</th>
+            <th>缓存命中</th>
+            <th>输出 Tokens</th>
             <th>耗时</th>
             <th>首字</th>
             <th>模型倍率</th>
@@ -2296,10 +2447,11 @@ function LogTableView({
                 <td>{item.model_name || "--"}</td>
                 <td>{item.token_name || "--"}</td>
                 <td>{item.group || "--"}</td>
-                <td className="mono-cell">{item.request_id || "--"}</td>
                 <td>{formatCurrency(item.quota / 500000)}</td>
-                <td>{formatInput(item.prompt_tokens, other.cache_write_tokens)}</td>
-                <td>{formatInput(item.completion_tokens, other.cache_tokens)}</td>
+                <td>{formatCount(item.prompt_tokens)}</td>
+                <td>{formatCount(getCacheWriteTokens(other))}</td>
+                <td>{formatCount(other.cache_tokens)}</td>
+                <td>{formatCount(item.completion_tokens)}</td>
                 <td>{formatDuration(item.use_time)}</td>
                 <td>{formatLatency(other.frt)}</td>
                 <td>{formatRatio(other.model_ratio)}</td>
@@ -2383,6 +2535,7 @@ function LogDetailDialog({
   onFilterRequestId: (value: string) => void;
 }) {
   const other = parseOther(item.other);
+  const cacheStatus = describeCacheUsage(other);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -2418,18 +2571,42 @@ function LogDetailDialog({
 
         <div className="detail-grid">
           <MetricBadge label="消费" value={formatCurrency(item.quota / 500000)} />
-          <MetricBadge label="输入" value={formatInput(item.prompt_tokens, other.cache_write_tokens)} />
-          <MetricBadge label="输出" value={formatInput(item.completion_tokens, other.cache_tokens)} />
+          <MetricBadge label="输入 Tokens" value={formatCount(item.prompt_tokens)} />
+          <MetricBadge label="输出 Tokens" value={formatCount(item.completion_tokens)} />
           <MetricBadge label="耗时" value={formatDuration(item.use_time)} />
           <MetricBadge label="首字" value={formatLatency(other.frt)} />
           <MetricBadge label="流式" value={item.is_stream ? "流式" : "非流式"} />
           <MetricBadge label="模型倍率" value={formatRatio(other.model_ratio)} />
           <MetricBadge label="分组倍率" value={formatRatio(other.group_ratio)} />
           <MetricBadge label="输出倍率" value={formatRatio(other.completion_ratio)} />
-          <MetricBadge label="5m缓存倍率" value={formatRatio(other.cache_creation_ratio_5m)} />
           <MetricBadge label="渠道" value={item.channel_name || "--"} />
           <MetricBadge label="用户" value={item.username || "--"} />
         </div>
+
+        <section className="detail-section">
+          <div className="section-title">
+            <Database size={16} />
+            <span>缓存信息</span>
+          </div>
+          <div className="detail-cache-grid">
+            <div className="detail-block">
+              <span>写入缓存 Tokens</span>
+              <strong>{formatCount(getCacheWriteTokens(other))}</strong>
+            </div>
+            <div className="detail-block">
+              <span>命中缓存 Tokens</span>
+              <strong>{formatCount(other.cache_tokens)}</strong>
+            </div>
+            <div className="detail-block">
+              <span>5m 缓存倍率</span>
+              <strong>{formatRatio(other.cache_creation_ratio_5m)}</strong>
+            </div>
+            <div className="detail-block">
+              <span>缓存参与情况</span>
+              <strong>{cacheStatus}</strong>
+            </div>
+          </div>
+        </section>
 
         <div className="detail-meta-grid">
           <div className="detail-block">
@@ -2494,7 +2671,7 @@ function LogDetailDialog({
           <article className="detail-content-card">
             <div className="section-title">
               <Server size={16} />
-              <span>倍率与缓存细节</span>
+              <span>倍率与原始数据</span>
             </div>
             <pre>{JSON.stringify(other, null, 2)}</pre>
           </article>
@@ -2579,6 +2756,20 @@ async function broadcastWindowEvent<T>(sourceLabel: AppWindowKind, event: string
   const targets = WINDOW_LABELS.filter((label) => label !== sourceLabel);
 
   await Promise.allSettled(targets.map((label) => sender.emitTo(label, event, payload)));
+}
+
+function confirmLogout(hasUnsavedChanges = false) {
+  return window.confirm(
+    hasUnsavedChanges
+      ? "确认登出吗？这会清空当前用户 ID 和 Token，并丢弃当前未保存草稿，让所有窗口回到未登录状态。"
+      : "确认登出吗？这会清空当前用户 ID 和 Token，并让所有窗口回到未登录状态。",
+  );
+}
+
+async function logoutAndBroadcast(sourceLabel: AppWindowKind) {
+  const payload = await invoke<AppConfig>("logout");
+  await broadcastWindowEvent(sourceLabel, "config-updated", payload);
+  return payload;
 }
 
 async function closeWindowByLabel(
@@ -2693,11 +2884,22 @@ function normalizeConfig(config: AppConfig): AppConfig {
 
 function parseOther(raw: string): OtherInfo {
   try {
-    return JSON.parse(raw) as OtherInfo;
+    const parsed = (JSON.parse(raw) ?? {}) as Partial<OtherInfo>;
+    return {
+      cache_tokens: Number(parsed.cache_tokens) || 0,
+      cache_write_tokens: Number(parsed.cache_write_tokens) || 0,
+      cache_creation_tokens: Number(parsed.cache_creation_tokens) || 0,
+      model_ratio: Number(parsed.model_ratio) || 0,
+      group_ratio: Number(parsed.group_ratio) || 0,
+      completion_ratio: Number(parsed.completion_ratio) || 0,
+      cache_creation_ratio_5m: Number(parsed.cache_creation_ratio_5m) || 0,
+      frt: Number(parsed.frt) || 0,
+    };
   } catch {
     return {
       cache_tokens: 0,
       cache_write_tokens: 0,
+      cache_creation_tokens: 0,
       model_ratio: 0,
       group_ratio: 0,
       completion_ratio: 0,
@@ -2750,8 +2952,16 @@ function formatWindow(minutes: number) {
   return `${minutes} 分钟`;
 }
 
-function formatInput(primary: number, extra: number) {
-  return extra > 0 ? `${primary} (+${extra})` : `${primary}`;
+function formatCount(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "--";
+  }
+
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function getCacheWriteTokens(other: OtherInfo) {
+  return other.cache_write_tokens > 0 ? other.cache_write_tokens : Math.max(other.cache_creation_tokens, 0);
 }
 
 function formatDuration(value: number) {
@@ -2764,6 +2974,21 @@ function formatLatency(value: number) {
 
 function formatRatio(value: number) {
   return value > 0 ? value.toFixed(2) : "--";
+}
+
+function describeCacheUsage(other: OtherInfo) {
+  const cacheWriteTokens = getCacheWriteTokens(other);
+
+  if (cacheWriteTokens > 0 && other.cache_tokens > 0) {
+    return "已写入并命中";
+  }
+  if (cacheWriteTokens > 0) {
+    return "仅写入缓存";
+  }
+  if (other.cache_tokens > 0) {
+    return "仅命中缓存";
+  }
+  return "未使用缓存";
 }
 
 function formatDesktopPlatform(platform: DesktopPlatform) {
@@ -2804,6 +3029,35 @@ function buildInitials(modelName: string) {
 
   const chunks = clean.split(/[\s:/-]+/).filter(Boolean);
   return chunks.slice(0, 2).map((item) => item[0]?.toUpperCase() ?? "").join("");
+}
+
+function isLogViewMode(value: string): value is LogViewMode {
+  return value === "card" || value === "table";
+}
+
+function loadInitialLogViewMode(): LogViewMode {
+  if (typeof window === "undefined") {
+    return "table";
+  }
+
+  try {
+    const stored = window.localStorage.getItem(LOG_VIEW_MODE_STORAGE_KEY);
+    return stored && isLogViewMode(stored) ? stored : "table";
+  } catch {
+    return "table";
+  }
+}
+
+function persistLogViewMode(viewMode: LogViewMode) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LOG_VIEW_MODE_STORAGE_KEY, viewMode);
+  } catch {
+    // 视图偏好写入失败时不影响主流程。
+  }
 }
 
 async function copyToClipboard(

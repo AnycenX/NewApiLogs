@@ -43,6 +43,7 @@ export interface LogStat {
 export interface OtherInfo {
   cache_tokens: number;
   cache_write_tokens: number;
+  cache_creation_tokens: number;
   model_ratio: number;
   group_ratio: number;
   completion_ratio: number;
@@ -164,5 +165,6 @@ export interface ClearCacheResult {
 
 export interface LogSyncEventPayload {
   should_reload: boolean;
+  cache_hit_rate: number | null;
   sync_state: CacheSyncState;
 }

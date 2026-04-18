@@ -546,7 +546,7 @@ impl Database {
 
       if let Ok(other) = serde_json::from_str::<OtherInfo>(&other_raw) {
         stats.cache_read_tokens += other.cache_tokens;
-        stats.cache_write_tokens += other.cache_write_tokens;
+        stats.cache_write_tokens += other.cache_write_input_tokens();
       }
     }
 

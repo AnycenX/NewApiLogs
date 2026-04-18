@@ -76,6 +76,7 @@ pub fn run() {
       commands::load_bootstrap,
       commands::verify_login,
       commands::save_config,
+      commands::logout,
       commands::open_settings_window,
       commands::open_float_window,
       commands::close_window,
