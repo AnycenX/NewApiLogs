@@ -66,6 +66,7 @@ npm run dev
 ```bash
 npm run build
 npm run tauri build
+npm run build:mac
 ```
 
 ### PowerShell 构建脚本
@@ -84,6 +85,35 @@ npm run tauri build
 .\build.ps1 -Mode debug
 .\build.ps1 -Mode release
 ```
+
+### macOS 构建脚本
+
+仓库也提供了一个 macOS 下的辅助脚本：
+
+```bash
+./build-macos.sh
+```
+
+可选模式：
+
+```bash
+./build-macos.sh frontend
+./build-macos.sh check
+./build-macos.sh debug
+./build-macos.sh release
+```
+
+如果只想走默认的 release 构建，也可以直接运行：
+
+```bash
+npm run build:mac
+```
+
+这个脚本会在 `tauri build` 完成后自动对 `.app` 做一次完整签名：
+
+- 默认使用 ad hoc 签名，修复本地 `codesign --verify` 校验问题
+- 如果设置了 `APPLE_SIGNING_IDENTITY`，会改用真实证书签名
+- 即使已经通过 ad hoc 校验，`spctl` 和 Gatekeeper 仍然需要 `Developer ID Application` 签名与 notarization
 
 ## 平台依赖
 
@@ -142,4 +172,3 @@ sudo apt install -y \
 
 - 已配置 `.gitignore`，默认忽略 `node_modules`、`dist`、`src-tauri/target`、本地数据库和环境文件
 - 如需二次开发，建议先创建自己的测试账号配置，再进行真实日志同步
-
