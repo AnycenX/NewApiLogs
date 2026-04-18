@@ -67,6 +67,7 @@ npm run dev
 npm run build
 npm run tauri build
 npm run build:mac
+npm run build:mac:publish
 ```
 
 ### PowerShell 构建脚本
@@ -99,21 +100,73 @@ npm run build:mac
 ```bash
 ./build-macos.sh frontend
 ./build-macos.sh check
-./build-macos.sh debug
-./build-macos.sh release
+./build-macos.sh debug local
+./build-macos.sh release local
+./build-macos.sh release sign
+./build-macos.sh release publish
 ```
 
-如果只想走默认的 release 构建，也可以直接运行：
+如果只想走默认的本机 release 构建，也可以直接运行：
 
 ```bash
 npm run build:mac
 ```
 
-这个脚本会在 `tauri build` 完成后自动对 `.app` 做一次完整签名：
+也可以使用更明确的命令：
 
-- 默认使用 ad hoc 签名，修复本地 `codesign --verify` 校验问题
-- 如果设置了 `APPLE_SIGNING_IDENTITY`，会改用真实证书签名
-- 即使已经通过 ad hoc 校验，`spctl` 和 Gatekeeper 仍然需要 `Developer ID Application` 签名与 notarization
+```bash
+npm run build:mac:sign
+npm run build:mac:publish
+```
+
+三种模式的区别：
+
+- `local`：只用于本机测试。先生成 `.app`，再做 ad hoc 签名，并重新生成 `.dmg`，避免出现安装后提示“已损坏”
+- `sign`：使用 `Developer ID Application` 证书签名 `.app` 和 `.dmg`，但不做 notarization
+- `publish`：使用 `Developer ID Application` 证书签名，并通过 Apple notarization，适合对外发布
+
+默认行为：
+
+- `npm run build:mac` 固定走 `local`
+- `npm run build:mac:sign` 固定走 `sign`
+- `npm run build:mac:publish` 固定走 `publish`
+
+发布前需要准备：
+
+- 在本机钥匙串中安装 `Developer ID Application` 证书
+- 用 `security find-identity -v -p codesigning` 确认签名身份名称
+- 设置 `APPLE_SIGNING_IDENTITY`
+- notarization 凭据二选一：
+- 方式一：`APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_KEY_PATH`
+- 方式二：`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`
+
+示例：
+
+```bash
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID1234)"
+export APPLE_API_ISSUER="00000000-0000-0000-0000-000000000000"
+export APPLE_API_KEY="ABC123DEFG"
+export APPLE_API_KEY_PATH="$HOME/.private_keys/AuthKey_ABC123DEFG.p8"
+npm run build:mac:publish
+```
+
+说明：
+
+- `local` 模式下，`codesign --verify` 可以通过，但 `spctl` 和 Gatekeeper 仍会拒绝 ad hoc 签名
+- `sign` 模式适合做发布前签名检查，不适合直接公开分发
+- `publish` 模式才是 macOS 对外分发所需的完整流程
+
+如果你不打算购买 Apple Developer Program，也可以直接分发 `local` 模式生成的 `.dmg`，但需要在发布页明确告诉用户按下面步骤安装：
+
+```text
+1. 下载并打开 dmg，把应用拖到“应用程序”
+2. 不要直接双击第一次打开
+3. 打开“系统设置 -> 隐私与安全性”
+4. 在底部看到“已阻止打开 WebApiLogs”后，点击“仍要打开”
+5. 或者在“应用程序”里右键 WebApiLogs，选择“打开”，再确认一次
+```
+
+这种方式更适合开源项目、技术用户或小范围分发，不适合面向普通用户的大规模公开发布。
 
 ## 平台依赖
 
