@@ -3,8 +3,6 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{anyhow, bail, Context};
 use chrono::{Local, TimeZone, Utc};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
-#[cfg(target_os = "macos")]
-use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tokio::{sync::Mutex, time::sleep};
 
 use crate::{
@@ -23,8 +21,6 @@ type CommandResult<T> = Result<T, String>;
 
 const INCREMENTAL_SYNC_OVERLAP_SECONDS: i64 = 300;
 const MAX_SYNC_ATTEMPTS: usize = 3;
-#[cfg(target_os = "macos")]
-const FLOAT_WINDOW_CORNER_RADIUS: f64 = 22.0;
 
 #[derive(Clone)]
 struct SyncPlan {
@@ -434,17 +430,6 @@ fn apply_float_window_config(
 }
 
 fn apply_float_window_appearance(_window: &tauri::WebviewWindow) -> anyhow::Result<()> {
-  #[cfg(target_os = "macos")]
-  {
-    _window.set_effects(
-      EffectsBuilder::new()
-        .effect(Effect::AppearanceBased)
-        .state(EffectState::Active)
-        .radius(FLOAT_WINDOW_CORNER_RADIUS)
-        .build(),
-    )?;
-  }
-
   Ok(())
 }
 
