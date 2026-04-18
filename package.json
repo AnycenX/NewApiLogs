@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:mac": "bash ./build-macos.sh release local",
+    "build:mac:sign": "bash ./build-macos.sh release sign",
+    "build:mac:publish": "bash ./build-macos.sh release publish",
+    "build:mac:debug": "bash ./build-macos.sh debug",
+    "check:mac": "bash ./build-macos.sh check",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "tauri": "tauri"
