@@ -79,11 +79,18 @@ function Ensure-Command([string]$CommandName, [string]$Hint) {
   }
 }
 
+function Get-AppVersion {
+  $TauriConfigPath = Join-Path $ProjectRoot "src-tauri\tauri.conf.json"
+  $TauriConfig = Get-Content $TauriConfigPath -Raw | ConvertFrom-Json
+  return $TauriConfig.version
+}
+
 function Show-Outputs([string]$BuildMode) {
   $TargetDir = Join-Path $ProjectRoot "src-tauri\target\$BuildMode"
+  $AppVersion = Get-AppVersion
   $AppExe = Join-Path $TargetDir "app.exe"
-  $NsisExe = Join-Path $TargetDir "bundle\nsis\WebApiLogs_0.1.0_x64-setup.exe"
-  $Msi = Join-Path $TargetDir "bundle\msi\WebApiLogs_0.1.0_x64_en-US.msi"
+  $NsisExe = Join-Path $TargetDir "bundle\nsis\WebApiLogs_${AppVersion}_x64-setup.exe"
+  $Msi = Join-Path $TargetDir "bundle\msi\WebApiLogs_${AppVersion}_x64_en-US.msi"
 
   Write-Step "Build outputs"
   if (Test-Path $AppExe) {
